@@ -978,6 +978,626 @@ test('auto-heading: auto, skip-h1, indent → combined old + new options', () =>
   assertEqual(r?.headingIndent, true)
 })
 
+// ═══════════════════════════════════════════════════════════════════════
+// SETEXT HEADING TESTS (Issue #5)
+// ═══════════════════════════════════════════════════════════════════════
+
+console.log('\n📏 Setext Heading Detection')
+
+// Setext heading underline detection regex (mirrors headingAnalyzer.ts)
+function isSetextH1Underline(line) {
+  return /^\s{0,3}=+\s*$/.test(line)
+}
+
+function isSetextH2Underline(line) {
+  return /^\s{0,3}-{2,}\s*$/.test(line)
+}
+
+test('=== is a setext H1 underline', () => {
+  assertEqual(isSetextH1Underline('==='), true)
+})
+
+test('============ is a setext H1 underline', () => {
+  assertEqual(isSetextH1Underline('============'), true)
+})
+
+test('= is a setext H1 underline (single)', () => {
+  assertEqual(isSetextH1Underline('='), true)
+})
+
+test('  === (leading spaces) is a setext H1 underline', () => {
+  assertEqual(isSetextH1Underline('  ==='), true)
+})
+
+test('   === (3 leading spaces) is a setext H1 underline', () => {
+  assertEqual(isSetextH1Underline('   ==='), true)
+})
+
+test('    === (4 leading spaces = code) is NOT a setext H1 underline', () => {
+  assertEqual(isSetextH1Underline('    ==='), false)
+})
+
+test('=== followed by spaces is still a setext H1 underline', () => {
+  assertEqual(isSetextH1Underline('===   '), true)
+})
+
+test('=== with text after is NOT a setext H1 underline', () => {
+  assertEqual(isSetextH1Underline('=== text'), false)
+})
+
+test('--- is a setext H2 underline', () => {
+  assertEqual(isSetextH2Underline('---'), true)
+})
+
+test('---------- is a setext H2 underline', () => {
+  assertEqual(isSetextH2Underline('----------'), true)
+})
+
+test('-- (only 2 dashes) is a setext H2 underline', () => {
+  assertEqual(isSetextH2Underline('--'), true)
+})
+
+test('- (single dash) is NOT a setext H2 underline (list marker)', () => {
+  assertEqual(isSetextH2Underline('-'), false)
+})
+
+test('  --- (leading spaces) is a setext H2 underline', () => {
+  assertEqual(isSetextH2Underline('  ---'), true)
+})
+
+test('    --- (4 leading spaces) is NOT a setext H2 underline', () => {
+  assertEqual(isSetextH2Underline('    ---'), false)
+})
+
+test('=== is NOT a setext H2 underline', () => {
+  assertEqual(isSetextH2Underline('==='), false)
+})
+
+test('--- is NOT a setext H1 underline', () => {
+  assertEqual(isSetextH1Underline('---'), false)
+})
+
+// ─── Setext Heading Numbering Integration Tests ─────────────────────────
+
+console.log('\n🔢 Setext + ATX Mixed Numbering')
+
+// Simulates analyzeHeadings with setext heading support.
+// Input: array of { line, level, text, nextLineText } where nextLineText
+// indicates what follows the heading text line (for setext detection).
+function simulateAnalyzer(docLines, headingsMeta, settings = {}) {
+  const {
+    firstLevel = 2,
+    maxLevel = 6,
+    skipH1 = true,
+    skipMarker = '',
+  } = settings
+
+  const effectiveFirst = skipH1 ? Math.max(firstLevel, 2) : firstLevel
+  const getLine = (n) => docLines[n] || ''
+
+  // Phase 1: Parse headings
+  const rawAnalysis = []
+  for (const heading of headingsMeta) {
+    const lineNumber = heading.line
+    const lineText = getLine(lineNumber)
+    if (!lineText && lineText !== '') continue
+
+    const hashMatch = lineText.match(/^(\s{0,3}#{1,6})\s+/)
+
+    let hashPrefix, rawText, isSetext = false
+    const level = heading.level
+
+    if (hashMatch) {
+      hashPrefix = hashMatch[1].trimStart()
+      rawText = lineText.substring(hashMatch[0].length)
+    } else {
+      const nextLine = getLine(lineNumber + 1)
+      const isH1 = nextLine != null && /^\s{0,3}=+\s*$/.test(nextLine)
+      const isH2 = nextLine != null && /^\s{0,3}-{2,}\s*$/.test(nextLine)
+      if (!isH1 && !isH2) continue
+      hashPrefix = ''
+      rawText = lineText.trim()
+      isSetext = true
+    }
+
+    // Skip detection
+    let isSkipped = false
+    let skipReason = null
+
+    if (skipH1 && level === 1) {
+      isSkipped = true; skipReason = 'skip-h1'
+    } else if (level < effectiveFirst) {
+      isSkipped = true; skipReason = 'below-first-level'
+    } else if (level > maxLevel) {
+      isSkipped = true; skipReason = 'above-max-level'
+    } else if (/<!--\s*(?:skip|no-number|ah-skip|skip-number)\s*-->/.test(lineText)) {
+      isSkipped = true; skipReason = 'html-comment'
+    } else if (skipMarker && rawText.trimEnd().endsWith(skipMarker)) {
+      isSkipped = true; skipReason = 'skip-marker'
+    }
+
+    rawAnalysis.push({
+      line: lineNumber,
+      level,
+      rawText,
+      hashPrefix,
+      isSkipped,
+      skipReason,
+      isSetext,
+      computedNumber: '',
+    })
+  }
+
+  // Phase 2: Compute numbers (mirrors headingAnalyzer.ts phase 2)
+  let stack = []
+  let previousLevel = effectiveFirst
+
+  for (const heading of rawAnalysis) {
+    if (heading.isSkipped) {
+      if (heading.skipReason === 'below-first-level' || heading.skipReason === 'skip-h1') {
+        stack = []
+        previousLevel = effectiveFirst
+      }
+      continue
+    }
+
+    const level = heading.level
+
+    if (stack.length === 0) {
+      stack.push(1)
+    } else if (level === previousLevel) {
+      stack[stack.length - 1]++
+    } else if (level > previousLevel) {
+      for (let l = previousLevel + 1; l <= level; l++) {
+        stack.push(1)
+      }
+    } else if (level < previousLevel) {
+      const targetDepth = (level - effectiveFirst) + 1
+      while (stack.length > targetDepth) stack.pop()
+      if (stack.length > 0) {
+        stack[stack.length - 1]++
+      } else {
+        stack.push(1)
+      }
+    }
+
+    previousLevel = level
+    heading.computedNumber = stack.join('.')
+  }
+
+  return rawAnalysis
+}
+
+// Helper to extract just the computed numbers (null for skipped)
+function getNumbers(analysis) {
+  return analysis.map(h => h.isSkipped ? null : h.computedNumber)
+}
+
+test('Setext H1 (skipped) + ATX H2s → [null, "1", "2"]', () => {
+  const docLines = [
+    'My Title',    // line 0 — setext H1
+    '========',    // line 1 — underline
+    '',            // line 2
+    '## First',    // line 3 — ATX H2
+    '',            // line 4
+    '## Second',   // line 5 — ATX H2
+  ]
+  const headings = [
+    { line: 0, level: 1 },
+    { line: 3, level: 2 },
+    { line: 5, level: 2 },
+  ]
+  const result = getNumbers(simulateAnalyzer(docLines, headings))
+  assertArrayEqual(result, [null, '1', '2'])
+})
+
+test('ATX H2 + Setext H2 + ATX H3 → ["1", "2", "2.1"]', () => {
+  const docLines = [
+    '## First',    // line 0
+    '',            // line 1
+    'Second',      // line 2 — setext H2
+    '------',      // line 3 — underline
+    '',            // line 4
+    '### Sub',     // line 5 — ATX H3
+  ]
+  const headings = [
+    { line: 0, level: 2 },
+    { line: 2, level: 2 },
+    { line: 5, level: 3 },
+  ]
+  const result = getNumbers(simulateAnalyzer(docLines, headings))
+  assertArrayEqual(result, ['1', '2', '2.1'])
+})
+
+test('All setext headings: H1 + H2 + H2 → [null, "1", "2"]', () => {
+  const docLines = [
+    'Title',       // line 0
+    '=====',       // line 1
+    '',            // line 2
+    'Section A',   // line 3
+    '---------',   // line 4
+    '',            // line 5
+    'Section B',   // line 6
+    '---------',   // line 7
+  ]
+  const headings = [
+    { line: 0, level: 1 },
+    { line: 3, level: 2 },
+    { line: 6, level: 2 },
+  ]
+  const result = getNumbers(simulateAnalyzer(docLines, headings))
+  assertArrayEqual(result, [null, '1', '2'])
+})
+
+test('Setext H1 not skipped (skipH1=false): H1 + H2 → ["1", "1.1"]', () => {
+  const docLines = [
+    'Title',       // line 0
+    '=====',       // line 1
+    '',            // line 2
+    '## Sub',      // line 3
+  ]
+  const headings = [
+    { line: 0, level: 1 },
+    { line: 3, level: 2 },
+  ]
+  const result = getNumbers(simulateAnalyzer(docLines, headings, { skipH1: false, firstLevel: 1 }))
+  assertArrayEqual(result, ['1', '1.1'])
+})
+
+test('Setext H2 between ATX H2s maintains numbering', () => {
+  const docLines = [
+    '## One',      // line 0
+    '',            // line 1
+    'Two',         // line 2 — setext H2
+    '---',         // line 3
+    '',            // line 4
+    '## Three',    // line 5
+  ]
+  const headings = [
+    { line: 0, level: 2 },
+    { line: 2, level: 2 },
+    { line: 5, level: 2 },
+  ]
+  const result = getNumbers(simulateAnalyzer(docLines, headings))
+  assertArrayEqual(result, ['1', '2', '3'])
+})
+
+test('Setext H2 with nested ATX H3 → ["1", "1.1", "1.2"]', () => {
+  const docLines = [
+    'Chapter',     // line 0 — setext H2
+    '-------',     // line 1
+    '',            // line 2
+    '### Sub A',   // line 3
+    '',            // line 4
+    '### Sub B',   // line 5
+  ]
+  const headings = [
+    { line: 0, level: 2 },
+    { line: 3, level: 3 },
+    { line: 5, level: 3 },
+  ]
+  const result = getNumbers(simulateAnalyzer(docLines, headings))
+  assertArrayEqual(result, ['1', '1.1', '1.2'])
+})
+
+// ─── Setext Skip Comment Detection ──────────────────────────────────────
+
+console.log('\n🚫 Setext Skip Comment Detection')
+
+test('Setext heading with <!-- skip --> is skipped', () => {
+  const docLines = [
+    'Title <!-- skip -->',   // line 0
+    '======',                // line 1
+    '',                      // line 2
+    '## Next',               // line 3
+  ]
+  const headings = [
+    { line: 0, level: 1 },
+    { line: 3, level: 2 },
+  ]
+  const result = simulateAnalyzer(docLines, headings, { skipH1: false, firstLevel: 1 })
+  assertEqual(result[0].isSkipped, true)
+  assertEqual(result[0].skipReason, 'html-comment')
+  assertEqual(result[1].computedNumber, '1')
+})
+
+// ─── Setext Edge Cases ──────────────────────────────────────────────────
+
+console.log('\n🔬 Setext Edge Cases')
+
+test('Single = is valid setext H1 underline', () => {
+  assertEqual(isSetextH1Underline('='), true)
+})
+
+test('Setext heading detection: text + === detected as H1', () => {
+  const docLines = ['My Title', '===']
+  const headings = [{ line: 0, level: 1 }]
+  const result = simulateAnalyzer(docLines, headings, { skipH1: false, firstLevel: 1 })
+  assertEqual(result[0].isSetext, true)
+  assertEqual(result[0].level, 1)
+  assertEqual(result[0].rawText, 'My Title')
+})
+
+test('Setext heading detection: text + --- detected as H2', () => {
+  const docLines = ['My Title', '---']
+  const headings = [{ line: 0, level: 2 }]
+  const result = simulateAnalyzer(docLines, headings)
+  assertEqual(result[0].isSetext, true)
+  assertEqual(result[0].level, 2)
+  assertEqual(result[0].rawText, 'My Title')
+})
+
+test('Non-heading line without underline is not detected', () => {
+  const docLines = ['My Title', 'Regular text']
+  const headings = [{ line: 0, level: 1 }]
+  // This would fail to detect as heading since next line isn't underline
+  const result = simulateAnalyzer(docLines, headings, { skipH1: false, firstLevel: 1 })
+  assertEqual(result.length, 0) // not recognized
+})
+
+test('ATX heading is NOT treated as setext (no false positive)', () => {
+  const docLines = ['## Normal ATX', 'Some text']
+  const headings = [{ line: 0, level: 2 }]
+  const result = simulateAnalyzer(docLines, headings)
+  assertEqual(result[0].isSetext, false)
+  assertEqual(result[0].hashPrefix, '##')
+})
+
+test('Setext heading: hashPrefix is empty string', () => {
+  const docLines = ['Title', '=====']
+  const headings = [{ line: 0, level: 1 }]
+  const result = simulateAnalyzer(docLines, headings, { skipH1: false, firstLevel: 1 })
+  assertEqual(result[0].hashPrefix, '')
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// READING MODE CONSISTENCY TESTS (Issue #4)
+// ═══════════════════════════════════════════════════════════════════════
+
+console.log('\n📖 Reading Mode Consistency (Pre-computed vs Stateful)')
+
+// Simulates the OLD stateful post-processor approach (the bug)
+function simulateStatefulPostProcessor(headingLevels, skipH1 = true, firstLevel = 2, maxLevel = 6) {
+  const effectiveFirst = skipH1 ? Math.max(firstLevel, 2) : firstLevel
+  let stack = []
+  let previousLevel = effectiveFirst
+  const results = []
+
+  for (const level of headingLevels) {
+    if (skipH1 && level === 1) {
+      stack = []; previousLevel = effectiveFirst
+      results.push(null); continue
+    }
+    if (level < effectiveFirst) {
+      stack = []; previousLevel = effectiveFirst
+      results.push(null); continue
+    }
+    if (level > maxLevel) {
+      results.push(null); continue
+    }
+
+    if (stack.length === 0) { stack.push(1) }
+    else if (level === previousLevel) { stack[stack.length - 1]++ }
+    else if (level > previousLevel) {
+      for (let l = previousLevel + 1; l <= level; l++) stack.push(1)
+    } else if (level < previousLevel) {
+      const targetDepth = (level - effectiveFirst) + 1
+      while (stack.length > targetDepth) stack.pop()
+      if (stack.length > 0) stack[stack.length - 1]++
+      else stack.push(1)
+    }
+
+    previousLevel = level
+    results.push(stack.join('.'))
+  }
+
+  return results
+}
+
+// Simulates the scenario where section 3 is re-rendered AFTER
+// the state was reset (the bug from Issue #4)
+function simulateStateResetBug(headingLevels, reRenderIndex) {
+  // First: render ALL sections normally
+  const fullResults = simulateStatefulPostProcessor(headingLevels)
+
+  // Then simulate: state is reset, only section at reRenderIndex is re-processed
+  // With fresh state, it would compute from scratch
+  const singleSection = simulateStatefulPostProcessor([headingLevels[reRenderIndex]])
+
+  // The displayed results: all original except the re-rendered section
+  const displayed = [...fullResults]
+  displayed[reRenderIndex] = singleSection[0]
+
+  return displayed
+}
+
+test('Normal processing produces correct numbers', () => {
+  const result = simulateStatefulPostProcessor([2, 2, 3, 2, 2])
+  assertArrayEqual(result, ['1', '2', '2.1', '3', '4'])
+})
+
+test('BUG: State reset + re-render of section 2 gives WRONG number', () => {
+  // This test demonstrates the bug: section 2 should be "2" but gets "1"
+  const headings = [2, 2, 3, 2, 2]
+  const buggyResults = simulateStateResetBug(headings, 1)
+  // Section 1 (index 1) was re-rendered with fresh state, gets "1" instead of "2"
+  assertEqual(buggyResults[1], '1') // BUG: should be '2' but stateful approach gives '1'
+  // The pre-computed approach always gives the right answer:
+  const correctResults = simulateStatefulPostProcessor(headings)
+  assertEqual(correctResults[1], '2') // Correct: '2'
+})
+
+test('BUG: State reset + re-render of section 3 gives WRONG number', () => {
+  const headings = [2, 2, 3, 2, 2]
+  const buggyResults = simulateStateResetBug(headings, 2)
+  // Section at index 2 (H3) re-rendered with fresh state
+  // Fresh state sees it as first H3 -> should be "1" (no parent context)
+  // But correct answer is "2.1"
+  assertEqual(buggyResults[2], '1') // BUG: should be '2.1'
+  const correctResults = simulateStatefulPostProcessor(headings)
+  assertEqual(correctResults[2], '2.1') // Correct: '2.1'
+})
+
+test('Pre-computed approach gives consistent numbers regardless of render order', () => {
+  // The pre-computed approach always processes ALL headings at once
+  // This is equivalent to calling simulateStatefulPostProcessor with ALL headings
+  const headings = [2, 2, 3, 2, 2]
+  const fullComputation = simulateStatefulPostProcessor(headings)
+
+  // No matter which section is re-rendered, the pre-computed result is the same
+  // because we just look up the number, not recompute it
+  assertArrayEqual(fullComputation, ['1', '2', '2.1', '3', '4'])
+
+  // Verify individual lookups match
+  assertEqual(fullComputation[0], '1')
+  assertEqual(fullComputation[1], '2')
+  assertEqual(fullComputation[2], '2.1')
+  assertEqual(fullComputation[3], '3')
+  assertEqual(fullComputation[4], '4')
+})
+
+// ─── Skip Comment Bug in Reading Mode ───────────────────────────────────
+
+console.log('\n🐛 Skip Comment Reading Mode Bug')
+
+// In reading mode, HTML comments are invisible in textContent
+// This test validates that skip detection on RAW text works correctly
+function hasSkipCommentInRaw(rawText) {
+  return /<!--\s*(?:skip|no-number|ah-skip|skip-number)\s*-->/.test(rawText)
+}
+
+test('Skip comment detected in raw text', () => {
+  assertEqual(hasSkipCommentInRaw('## Title <!-- skip -->'), true)
+})
+
+test('Skip comment detected in raw text (ah-skip variant)', () => {
+  assertEqual(hasSkipCommentInRaw('## Title <!-- ah-skip -->'), true)
+})
+
+test('Skip comment detected in raw text (no-number variant)', () => {
+  assertEqual(hasSkipCommentInRaw('## Title <!-- no-number -->'), true)
+})
+
+test('Skip comment NOT detected in rendered textContent (DOM strips it)', () => {
+  // In the rendered DOM, textContent would be just "Title" (comment stripped)
+  // The old post-processor tested textContent, which never contained the comment
+  const renderedTextContent = 'Title'
+  assertEqual(hasSkipCommentInRaw(renderedTextContent), false) // This is the BUG
+  // The fix: test against raw source text (via pre-computed analysis)
+})
+
+test('Numbering with skip comment: heading is skipped but others are correct', () => {
+  const docLines = [
+    '## First',                   // line 0
+    '## Skip me <!-- skip -->',   // line 1
+    '## Third',                   // line 2
+  ]
+  const headings = [
+    { line: 0, level: 2 },
+    { line: 1, level: 2 },
+    { line: 2, level: 2 },
+  ]
+  const result = simulateAnalyzer(docLines, headings)
+  assertEqual(result[0].computedNumber, '1')
+  assertEqual(result[1].isSkipped, true)
+  assertEqual(result[2].computedNumber, '2') // Not "3" — skipped heading doesn't count
+})
+
+// ─── Complex Mixed Document Test ────────────────────────────────────────
+
+console.log('\n📄 Complex Mixed Document (Setext + ATX + Skip)')
+
+test('Full document: Setext H1 (skip) + ATX H2 + Setext H2 + skip + ATX H3', () => {
+  const docLines = [
+    'Document Title',             // line 0 — setext H1
+    '==============',             // line 1
+    '',                           // line 2
+    '## Introduction',            // line 3 — ATX H2
+    '',                           // line 4
+    'Background',                 // line 5 — setext H2
+    '----------',                 // line 6
+    '',                           // line 7
+    '### Detail',                 // line 8 — ATX H3
+    '',                           // line 9
+    '## Conclusion <!-- skip -->', // line 10 — ATX H2 (skipped)
+    '',                           // line 11
+    '## References',              // line 12 — ATX H2
+  ]
+  const headings = [
+    { line: 0, level: 1 },
+    { line: 3, level: 2 },
+    { line: 5, level: 2 },
+    { line: 8, level: 3 },
+    { line: 10, level: 2 },
+    { line: 12, level: 2 },
+  ]
+  const result = simulateAnalyzer(docLines, headings)
+  const numbers = getNumbers(result)
+  assertArrayEqual(numbers, [null, '1', '2', '2.1', null, '3'])
+})
+
+test('Issue #5 exact repro: setext H1 + multiple setext H2', () => {
+  // Exact reproduction of the user's example from Issue #5
+  const docLines = [
+    'The H1 title',              // line 0
+    '============',              // line 1
+    '',                          // line 2
+    'some thing....',            // line 3
+    '',                          // line 4
+    'H2 title1',                 // line 5
+    '----------',                // line 6
+    '',                          // line 7
+    'sth about title1',          // line 8
+    '',                          // line 9
+    'H2 title2',                 // line 10
+    '----------',                // line 11
+    '',                          // line 12
+    'sth about title2',          // line 13
+  ]
+  const headings = [
+    { line: 0, level: 1 },  // setext H1
+    { line: 5, level: 2 },  // setext H2
+    { line: 10, level: 2 }, // setext H2
+  ]
+  const result = simulateAnalyzer(docLines, headings)
+  const numbers = getNumbers(result)
+  // H1 is skipped (skipH1=true), H2s get 1, 2
+  assertArrayEqual(numbers, [null, '1', '2'])
+})
+
+test('Setext heading with maxLevel=2: H3 is skipped', () => {
+  const docLines = [
+    'Chapter',     // line 0
+    '-------',     // line 1
+    '',            // line 2
+    '### Sub',     // line 3
+  ]
+  const headings = [
+    { line: 0, level: 2 },
+    { line: 3, level: 3 },
+  ]
+  const result = getNumbers(simulateAnalyzer(docLines, headings, { maxLevel: 2 }))
+  assertArrayEqual(result, ['1', null])
+})
+
+test('Setext H1 resets numbering (just like ATX H1)', () => {
+  const docLines = [
+    '## First',    // line 0
+    '## Second',   // line 1
+    'Title',       // line 2 — setext H1
+    '=====',       // line 3
+    '## Third',    // line 4
+  ]
+  const headings = [
+    { line: 0, level: 2 },
+    { line: 1, level: 2 },
+    { line: 2, level: 1 },
+    { line: 4, level: 2 },
+  ]
+  const result = getNumbers(simulateAnalyzer(docLines, headings))
+  assertArrayEqual(result, ['1', '2', null, '1']) // H1 resets, so Third is "1"
+})
+
 // ─── Summary ────────────────────────────────────────────────────────────
 
 console.log(`\n${'═'.repeat(50)}`)

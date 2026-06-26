@@ -38,10 +38,21 @@ export function removeBurnedInNumbers(
     if (!lineText) continue
 
     const hashMatch = lineText.match(/^(\s{0,3}#{1,6})\s+/)
-    if (!hashMatch) continue
 
-    const hashPrefix = hashMatch[1]
-    const afterHash = lineText.substring(hashMatch[0].length)
+    let hashPrefix: string
+    let afterHash: string
+
+    if (hashMatch) {
+      hashPrefix = hashMatch[1]
+      afterHash = lineText.substring(hashMatch[0].length)
+    } else {
+      // Check for setext heading: next line is === or ---
+      const nextLine = editor.getLine(lineNumber + 1)
+      const isSetext = nextLine != null && (/^\s{0,3}=+\s*$/.test(nextLine) || /^\s{0,3}-{2,}\s*$/.test(nextLine))
+      if (!isSetext) continue
+      hashPrefix = ''
+      afterHash = lineText.trimStart()
+    }
 
     let cleanedText: string | null = null
 
@@ -73,7 +84,7 @@ export function removeBurnedInNumbers(
 
     if (cleanedText === null) continue
 
-    const newLine = hashPrefix + ' ' + cleanedText
+    const newLine = hashPrefix ? (hashPrefix + ' ' + cleanedText) : cleanedText
     if (newLine !== lineText) {
       changes.push({
         text: newLine,
@@ -110,10 +121,21 @@ export function previewRemoval(
     if (!lineText) continue
 
     const hashMatch = lineText.match(/^(\s{0,3}#{1,6})\s+/)
-    if (!hashMatch) continue
 
-    const hashPrefix = hashMatch[1]
-    const afterHash = lineText.substring(hashMatch[0].length)
+    let hashPrefix: string
+    let afterHash: string
+
+    if (hashMatch) {
+      hashPrefix = hashMatch[1]
+      afterHash = lineText.substring(hashMatch[0].length)
+    } else {
+      // Check for setext heading: next line is === or ---
+      const nextLine = editor.getLine(lineNumber + 1)
+      const isSetext = nextLine != null && (/^\s{0,3}=+\s*$/.test(nextLine) || /^\s{0,3}-{2,}\s*$/.test(nextLine))
+      if (!isSetext) continue
+      hashPrefix = ''
+      afterHash = lineText.trimStart()
+    }
 
     let cleanedText: string | null = null
 
@@ -133,7 +155,7 @@ export function previewRemoval(
     }
 
     if (cleanedText === null) continue
-    const newLine = hashPrefix + ' ' + cleanedText
+    const newLine = hashPrefix ? (hashPrefix + ' ' + cleanedText) : cleanedText
     if (newLine !== lineText) {
       previews.push({ line: lineNumber, oldText: lineText, newText: newLine })
     }

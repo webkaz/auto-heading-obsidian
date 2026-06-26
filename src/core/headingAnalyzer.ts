@@ -26,7 +26,7 @@ export interface AnalyzedHeading {
   level: number
   /** Raw heading text as it appears in the file (without # prefix) */
   rawText: string
-  /** The `## ` prefix string */
+  /** The `## ` prefix string (empty for setext headings) */
   hashPrefix: string
   /** Any detected manual number prefix */
   detectedNumber: DetectedNumber | null
@@ -42,6 +42,8 @@ export interface AnalyzedHeading {
   skipReason: 'below-first-level' | 'above-max-level' | 'skip-h1' | 'skip-marker' | 'html-comment' | null
   /** Block ID if present (e.g., "^myBlockId") */
   blockId: string | null
+  /** Whether this is a setext-style heading (underlined with === or ---) */
+  isSetext: boolean
 }
 
 export interface HeadingAnalysis {
@@ -130,11 +132,27 @@ export function analyzeHeadings(
 
     // Parse the hash prefix (## , ### , etc.)
     const hashMatch = lineText.match(/^(\s{0,3}#{1,6})\s+/)
-    if (!hashMatch) continue
 
-    const hashPrefix = hashMatch[1].trimStart()
-    const rawText = lineText.substring(hashMatch[0].length)
+    let hashPrefix: string
+    let rawText: string
+    let isSetext = false
     const level = heading.level
+
+    if (hashMatch) {
+      // ATX heading
+      hashPrefix = hashMatch[1].trimStart()
+      rawText = lineText.substring(hashMatch[0].length)
+    } else {
+      // Check for setext heading: next line is === (H1) or --- (H2)
+      const nextLine = getLine(lineNumber + 1)
+      const isSetextH1 = nextLine != null && /^\s{0,3}=+\s*$/.test(nextLine)
+      const isSetextH2 = nextLine != null && /^\s{0,3}-{2,}\s*$/.test(nextLine)
+      if (!isSetextH1 && !isSetextH2) continue
+
+      hashPrefix = ''
+      rawText = lineText.trim()
+      isSetext = true
+    }
 
     // Detect manual numbers
     const detectedNumber = settings.detectManualNumbers
@@ -179,6 +197,7 @@ export function analyzeHeadings(
       isSkipped,
       skipReason,
       blockId,
+      isSetext,
     })
   }
 

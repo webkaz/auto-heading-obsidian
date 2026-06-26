@@ -18,11 +18,13 @@ import {
   createHeadingPostProcessor,
   updatePostProcessorSettings,
   resetFileState,
+  updateFileAnalysis,
 } from './decorations/postProcessor'
 import { registerCommands } from './commands/commandRegistry'
 import { registerContextMenu } from './ui/contextMenu'
 import { StatusBarManager } from './ui/statusBar'
 import { burnInNumbers } from './burnIn/burnInEngine'
+import { analyzeHeadings } from './core/headingAnalyzer'
 import { registerTocProcessor } from './toc/tocProcessor'
 import { createHeadingGutter, gutterCompartment, getGutterExtension } from './decorations/headingGutter'
 import { createHeadingToolbar } from './decorations/headingToolbar'
@@ -86,6 +88,9 @@ export default class AutoHeadingPlugin extends Plugin {
       this.app.metadataCache.on('changed', (file: TFile) => {
         resetFileState(file.path)
 
+        // Recompute heading analysis for reading-mode post-processor
+        void this.computeFileAnalysis(file)
+
         // Check if this change was caused by our own burn-in
         if (this.recentBurnIns.has(file.path)) {
           this.recentBurnIns.delete(file.path)
@@ -142,6 +147,8 @@ export default class AutoHeadingPlugin extends Plugin {
           window.clearTimeout(this._burnInTimer)
           this._burnInTimer = null
         }
+        // Compute heading analysis for reading-mode post-processor
+        void this.computeFileAnalysis(file)
         this.refreshDecorations()
       }),
     )
@@ -292,6 +299,25 @@ export default class AutoHeadingPlugin extends Plugin {
     }
   }
 
+  /**
+   * Pre-compute the heading analysis for a file and pass it to the
+   * reading-mode post-processor. Uses cachedRead for file content,
+   * mirroring the proven approach in tocProcessor.ts.
+   */
+  private async computeFileAnalysis(file: TFile): Promise<void> {
+    const metadata = this.app.metadataCache.getFileCache(file)
+    if (!metadata?.headings || metadata.headings.length === 0) {
+      updateFileAnalysis(file.path, { headings: [], totalCount: 0, numberedCount: 0, skippedCount: 0 })
+      return
+    }
+    const content = await this.app.vault.cachedRead(file)
+    const lines = content.split('\n')
+    const getLine = (n: number) => lines[n] || ''
+    const settings = this.getEffectiveSettings(file)
+    const analysis = analyzeHeadings(metadata.headings, getLine, settings)
+    updateFileAnalysis(file.path, analysis)
+  }
+
   // ─── Decoration Refresh ────────────────────────────────────
 
   refreshDecorations(): void {
@@ -316,6 +342,11 @@ export default class AutoHeadingPlugin extends Plugin {
 
     const settingsChanged = updateDecorationSettings(effectiveSettings, isEnabled)
     updatePostProcessorSettings(effectiveSettings, isEnabled)
+
+    // Pre-compute heading analysis for reading-mode post-processor
+    if (view?.file && isEnabled) {
+      void this.computeFileAnalysis(view.file)
+    }
 
     // Update gutter Compartment per-view and dispatch settings changes.
     // The gutter column is completely removed (via Compartment.reconfigure([]))

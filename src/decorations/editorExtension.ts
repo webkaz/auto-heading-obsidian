@@ -105,7 +105,36 @@ function extractHeadingsFromDoc(state: EditorState): DocHeading[] {
     }
 
     const match = text.match(/^(\s{0,3})(#{1,6})\s+(.+)/)
-    if (!match) continue
+    if (!match) {
+      // Check for setext heading: current line is text, next line is === or ---
+      if (i < doc.lines && trimmed.length > 0) {
+        const nextLine = doc.line(i + 1)
+        const nextText = nextLine.text
+        const isSetextH1 = /^\s{0,3}=+\s*$/.test(nextText)
+        const isSetextH2 = /^\s{0,3}-{2,}\s*$/.test(nextText)
+        if (isSetextH1 || isSetextH2) {
+          const setextLevel = isSetextH1 ? 1 : 2
+          const content = text.trimStart()
+          const leadingSpaces = text.length - content.length
+          const textFrom = line.from + leadingSpaces
+
+          const detected = currentSettings.detectManualNumbers
+            ? detectManualNumber(content)
+            : null
+
+          headings.push({
+            level: setextLevel,
+            lineNumber: i - 1,
+            textFrom,
+            headingText: content,
+            detected,
+          })
+          // Skip the underline line so it's not processed as a heading
+          i++
+        }
+      }
+      continue
+    }
 
     const hashes = match[2]
     const content = match[3]

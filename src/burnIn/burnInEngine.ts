@@ -97,16 +97,26 @@ export function burnInNumbers(
     if (!lineText) continue
 
     const hashMatch = lineText.match(/^(\s{0,3}#{1,6})\s+/)
-    if (!hashMatch) continue
 
-    const hashPrefix = hashMatch[1]
-    const afterHash = lineText.substring(hashMatch[0].length)
+    let hashPrefix: string
+    let afterHash: string
+
+    if (hashMatch) {
+      hashPrefix = hashMatch[1]
+      afterHash = lineText.substring(hashMatch[0].length)
+    } else if (heading.isSetext) {
+      // Setext heading: no hash prefix, text is the whole line (trimmed of leading spaces)
+      hashPrefix = ''
+      afterHash = lineText.trimStart()
+    } else {
+      continue
+    }
 
     if (heading.isSkipped) {
       // Strip any leftover plugin numbers from skipped headings
       if (hasPluginNumber(afterHash)) {
         const cleanText = stripPluginNumber(afterHash) || ''
-        const newLine = hashPrefix + ' ' + cleanText
+        const newLine = hashPrefix ? (hashPrefix + ' ' + cleanText) : cleanText
         if (newLine !== lineText) {
           changes.push({
             text: newLine,
@@ -150,7 +160,7 @@ export function burnInNumbers(
       }
     }
 
-    const newLine = hashPrefix + ' ' + newAfterHash
+    const newLine = hashPrefix ? (hashPrefix + ' ' + newAfterHash) : newAfterHash
     if (newLine !== lineText) {
       changes.push({
         text: newLine,
@@ -190,10 +200,20 @@ export function previewBurnIn(
     if (!lineText) continue
 
     const hashMatch = lineText.match(/^(\s{0,3}#{1,6})\s+/)
-    if (!hashMatch) continue
 
-    const hashPrefix = hashMatch[1]
-    const afterHash = lineText.substring(hashMatch[0].length)
+    let hashPrefix: string
+    let afterHash: string
+
+    if (hashMatch) {
+      hashPrefix = hashMatch[1]
+      afterHash = lineText.substring(hashMatch[0].length)
+    } else if (heading.isSetext) {
+      hashPrefix = ''
+      afterHash = lineText.trimStart()
+    } else {
+      continue
+    }
+
     const rawPrefix = heading.formattedNumber + settings.separator
     const numberPrefix = rawPrefix.trimEnd() + ' '
     const markedPrefix = AH_MARKER + numberPrefix
@@ -215,7 +235,7 @@ export function previewBurnIn(
       }
     }
 
-    const newLine = hashPrefix + ' ' + newAfterHash
+    const newLine = hashPrefix ? (hashPrefix + ' ' + newAfterHash) : newAfterHash
     if (newLine !== lineText) {
       previews.push({ line: heading.line, oldText: lineText, newText: newLine })
     }
