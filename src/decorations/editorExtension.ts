@@ -26,6 +26,7 @@ import {
 import { AutoHeadingSettings, DEFAULT_SETTINGS } from '../settings/settingsTypes'
 import { HeadingNumberWidget } from './widgets'
 import { detectManualNumber, DetectedNumber } from '../core/manualNumberDetector'
+import { findFrontMatterEndLine } from '../core/frontMatter'
 
 // ─── Per-editor Settings State ────────────────────────────────────────
 
@@ -113,11 +114,17 @@ function extractHeadingsFromDoc(
   let insideCodeBlock = false
   let fenceChar = ''    // '`' or '~'
   let fenceLen = 0      // number of fence chars in the opening fence
+  const frontMatterEndLine = findFrontMatterEndLine(
+    line => line < doc.lines ? doc.line(line + 1).text : '',
+    doc.lines - 1,
+  )
 
   for (let i = 1; i <= doc.lines; i++) {
     const line = doc.line(i)
     const text = line.text
     const trimmed = text.trimStart()
+
+    if (frontMatterEndLine >= 0 && i - 1 <= frontMatterEndLine) continue
 
     // Track code fences (CommonMark spec compliant):
     // - Opening fence: ≥3 backticks or tildes, optionally followed by info string

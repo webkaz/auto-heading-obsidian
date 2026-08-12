@@ -84,4 +84,21 @@ activeState = configure(activeState, makeSettings({ mode: 'decoration' }), false
 assert.deepEqual(getLabels(activeState), [])
 assert.deepEqual(getLabels(pinnedState), ['1. ', '1.1. '])
 
+// YAML delimiters must not create a phantom Setext H2 or offset the first H1.
+let frontMatterState = EditorState.create({
+  doc: '---\nauto-heading: auto\n---\n\n# Heading 1',
+  extensions,
+})
+frontMatterState = configure(
+  frontMatterState,
+  makeSettings({
+    mode: 'decoration',
+    enabled: true,
+    skipH1: false,
+    firstLevel: 1,
+  }),
+  true,
+)
+assert.deepEqual(getLabels(frontMatterState), ['1. '])
+
 console.log('editor view isolation tests passed')

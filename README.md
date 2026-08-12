@@ -196,6 +196,7 @@ Tests:
 node tests/test-core.mjs
 node tests/layer23-check.mjs
 npm run test:editor
+npm run test:reported
 ```
 
 ## License
